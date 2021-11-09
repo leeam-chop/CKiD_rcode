@@ -1,0 +1,83 @@
+###================================1. Load Required Packages=====================================
+library(readr) ###version==1.4.0
+library(dplyr) ###version==1.0.6
+library(caret) ###version==6.0-88
+library(e1071) ###version==1.7-7
+library(MLeval) ###versio== 0.3
+library(xgboost) ###version==1.4.1.1
+library(stringr) ###version==1.4.0
+library(car) ###version==3.0-10
+
+###================================2. Load Data================================================
+###Data has undergone QC procedures as detailed in the manuscript
+###Categorical variables have been assigned as factors: hypertension, sex, ACEi/ARB usage, race
+###Each primary etiology is coded as a binary factor, ex: fsgs (FSGS =1, not FSGS =0)
+###Proteinuria and eGFR have been log-2-transformed
+
+###================================3. Feature selection using Lasso regression========================
+lasso <- select(data, c(id, etiology, age, sex, race, eGFR, proteinuria, hypertension, ACEi/ARB usage)
+levels(lasso#etiology) <- c(“negative, “positive”)
+trctrl <- trainControl(method=”repeatedcv”, number=10, repeats=3, classProbs=TRUE, savePredictions=TRUE)
+trgrid <- expand.grid (alpha=1, lambda=seq(0.01, 0.1, by=0.01)
+set.seed(1) 
+model <- train(etiology~., 
+	data=lasso,	
+	method=”glmnet”,
+	metric=”Accuracy”,
+	trControl=trctrl,
+	tuneGrid=trgrid,
+	preProc=c(“zv”, “center”, “scale”))
+model#bestTune
+evalm(model, plots=”r”)
+coef <- coef(model$finalModel, model$bestTune$lambda)[,1]
+coef <- data.frame(coef)
+coef <- abs(coef)
+sum(coef != 0)
+write.csv(coef, file=”coef.csv)
+	###identified features with non-zero coefficients at cross-validated, tuned lambda
+
+###================================4. Subset data with Lasso-selected metabolites for each etiology======
+###Use 10 unique seeds to repeat training process 10 times
+set.seed(1) 
+levels(data_subset$etiology) <- c(“negative”, “positive”)
+###80-20 train-test split
+train <- data_subset %>% dplyr::sample_frac(0.8)
+test <- dplyr::anti_join(data_subset, train, by=”id”)
+###Remove subject ID from data for modeling
+train <- train[,-1]
+test <- test[,-1]
+trctrl <- trainControl(method=”repeatedcv”, number=10, repeats=3, classProbs=TRUE, savePredictions=TRUE)
+
+###================================5. Fit Support Vector Machine================================
+svm <- train(etiology~.,
+	data=train,
+	method=”svmLinear”,
+	trControl=trctrl)
+pred <- predict(svm, newdata=test, type=”prob”)
+evalm(data.frame(pred, test$etiology)
+	###assesses model performance on hold-out test split
+varImp(svm)
+	###identifies 10% important metabolites
+###repeat this with the 10 unique seedings
+
+###================================6. Fit Extreme gradient boosting================================
+grid <- expand.grid(nrounds=100, max_depth=6, colsample_bytree=0.5, eta=0.1, gamma=0, min_child_weight =1)
+xgb <- train(etiology~., 
+	data=train,
+	method=”xgbTree”,
+trControl=trctrl,
+	tuneGrid=grid)
+pred <- predict(xgb, newdata=test, type=”prob”)
+evalm(data.frame(pred, test$etiology)
+varImp(xgb)
+
+###================================7. Fit Random forest==========================================
+grid <- expand.grid(.mtry = ###square root of the number of lasso-selected metabolites per etiology)
+rf <- train(etiology~.,
+	data=train,
+	method=”rf”,
+	tuneGrid=grid,
+	trControl=trctrl)
+pred <- predict(rf, newdata=test, type=”prob”)
+evalm(data.frame(pred, test$etiology)
+varImp(rf)
